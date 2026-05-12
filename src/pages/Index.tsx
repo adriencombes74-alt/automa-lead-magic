@@ -6,9 +6,9 @@ import Comment from "@/components/landing/Comment";
 import Demo from "@/components/landing/Demo";
 import Benefices from "@/components/landing/Benefices";
 import Pricing from "@/components/landing/Pricing";
-import Temoignages from "@/components/landing/Temoignages";
 import Faq from "@/components/landing/Faq";
 import FinalCta from "@/components/landing/FinalCta";
+import Contact from "@/components/landing/Contact";
 import Footer from "@/components/landing/Footer";
 
 const Index = () => {
@@ -22,9 +22,9 @@ const Index = () => {
       <Demo />
       <Benefices />
       <Pricing />
-      <Temoignages />
       <Faq />
       <FinalCta />
+      <Contact />
       <Footer />
     </main>
   );

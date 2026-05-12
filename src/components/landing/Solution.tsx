@@ -1,25 +1,34 @@
+import { motion } from "framer-motion";
+import Reveal from "@/components/motion/Reveal";
+import RevealGroup from "@/components/motion/RevealGroup";
+import CountUp from "@/components/motion/CountUp";
+import { fadeUp } from "@/components/motion/motion";
+
 const features = [
   {
-    tag: "01 — Réponse instantanée",
+    n: 1,
+    label: "Réponse instantanée",
     title: "Un assistant qui répond à votre place, 24/7.",
-    body: "Sur votre site, WhatsApp, Messenger ou Google Business. Il parle comme vous, ne dort jamais et ne perd jamais un client.",
+    body: "Sur votre téléphone, votre site, WhatsApp, Messenger ou Google Business. Il décroche, répond, parle comme vous, ne dort jamais et ne perd jamais un client.",
   },
   {
-    tag: "02 — Devis automatiques",
+    n: 2,
+    label: "Devis automatiques",
     title: "Des devis chiffrés en moins d'une minute.",
     body: "Vous renseignez vos tarifs une seule fois. L'IA pose les bonnes questions et envoie un devis estimatif clair au client.",
   },
   {
-    tag: "03 — Agenda rempli tout seul",
+    n: 3,
+    label: "Agenda rempli tout seul",
     title: "Les RDV se calent dans votre agenda.",
-    body: "Le bot connaît vos disponibilités, propose les bons créneaux, envoie SMS de rappel — et réduit les no-shows.",
+    body: "Le bot connaît vos disponibilités, propose les bons créneaux, envoie SMS de rappel et relance automatiquement vos clients pour leurs révisions et leurs pneus hiver — réduit les no-shows.",
   },
 ];
 
 const Solution = () => (
   <section id="solution" className="border-b border-border bg-surface py-20 md:py-28">
     <div className="container-page">
-      <div className="max-w-2xl">
+      <Reveal className="max-w-2xl">
         <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-primary">
           La solution
         </span>
@@ -29,21 +38,27 @@ const Solution = () => (
         <p className="mt-4 text-[16px] text-muted-foreground">
           Vous restez le mécano. L'IA s'occupe d'accueillir, chiffrer et caler les RDV.
         </p>
-      </div>
+      </Reveal>
 
-      <div className="mt-12 grid gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-3">
+      <RevealGroup className="mt-12 grid gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-3">
         {features.map((f) => (
-          <div key={f.title} className="bg-surface p-7">
+          <motion.div
+            key={f.title}
+            variants={fadeUp}
+            whileHover={{ y: -2 }}
+            className="group relative bg-surface p-7 transition-colors hover:bg-surface"
+          >
             <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-primary">
-              {f.tag}
+              <CountUp to={f.n} prefix="0" /> — {f.label}
             </span>
             <h3 className="font-display mt-4 text-[22px] font-semibold leading-tight tracking-tight">
               {f.title}
             </h3>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{f.body}</p>
-          </div>
+            <span className="absolute bottom-0 left-0 h-px w-0 bg-primary transition-all duration-500 group-hover:w-full" />
+          </motion.div>
         ))}
-      </div>
+      </RevealGroup>
     </div>
   </section>
 );

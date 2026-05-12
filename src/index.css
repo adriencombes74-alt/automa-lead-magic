@@ -110,6 +110,16 @@
   }
 }
 
+@keyframes underline-draw {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+
+@keyframes blink-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 @layer utilities {
   .font-display { font-family: var(--font-display); }
   .font-body    { font-family: var(--font-body); }
@@ -123,5 +133,91 @@
     font-weight: 700;
     letter-spacing: -0.04em;
     line-height: 1.02;
+  }
+
+  .underline-draw {
+    position: relative;
+    display: inline-block;
+    padding-bottom: 6px;
+  }
+  .underline-draw::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 4px;
+    background: linear-gradient(90deg, hsl(var(--primary)) 0%, hsl(var(--primary-hover)) 50%, hsl(var(--primary)) 100%);
+    border-radius: 4px;
+    box-shadow: 0 2px 12px hsl(var(--primary) / 0.5);
+    transform: scaleX(0);
+    transform-origin: left center;
+    animation: underline-draw 900ms cubic-bezier(0.22, 1, 0.36, 1) 800ms forwards;
+  }
+
+  .shimmer-bg {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--primary)) 0%,
+      hsl(var(--primary)) 30%,
+      hsl(var(--primary-hover)) 50%,
+      hsl(var(--primary)) 70%,
+      hsl(var(--primary)) 100%
+    );
+    background-size: 200% 100%;
+  }
+
+  .conic-border-mask {
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+
+  .legal-prose h2 {
+    @apply mt-10 text-[22px] font-semibold tracking-tight text-foreground;
+  }
+  .legal-prose h2:first-child {
+    @apply mt-0;
+  }
+  .legal-prose h3 {
+    @apply mt-6 text-[16px] font-semibold tracking-tight text-foreground;
+  }
+  .legal-prose p {
+    @apply text-[14px] leading-relaxed text-muted-foreground;
+  }
+  .legal-prose ul {
+    @apply ml-5 list-disc space-y-1.5 text-[14px] leading-relaxed text-muted-foreground;
+  }
+  .legal-prose li::marker {
+    color: hsl(var(--muted-foreground));
+  }
+  .legal-prose strong {
+    @apply font-semibold text-foreground;
+  }
+  .legal-prose a {
+    @apply text-primary underline-offset-2 hover:underline;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-aurora-drift,
+  .animate-aurora-drift-alt,
+  .animate-pulse-soft,
+  .animate-shimmer,
+  .animate-halo-pulse,
+  .animate-dot-ping,
+  .animate-float-y,
+  .animate-fade-up {
+    animation: none !important;
+  }
+
+  .underline-draw::after {
+    transform: scaleX(1);
+    animation: none !important;
+  }
+
+  html {
+    scroll-behavior: auto;
   }
 }

@@ -1,3 +1,8 @@
+import { motion } from "framer-motion";
+import Reveal from "@/components/motion/Reveal";
+import RevealGroup from "@/components/motion/RevealGroup";
+import { fadeUp } from "@/components/motion/motion";
+
 const items = [
   {
     title: "Le téléphone sonne pendant que vous êtes sous une voiture.",
@@ -16,7 +21,7 @@ const items = [
 const Probleme = () => (
   <section id="probleme" className="border-b border-border bg-background py-20 md:py-28">
     <div className="container-page">
-      <div className="max-w-2xl">
+      <Reveal className="max-w-2xl">
         <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
           Le problème
         </span>
@@ -26,22 +31,51 @@ const Probleme = () => (
         <p className="mt-4 text-[16px] text-muted-foreground">
           Chaque appel manqué, c'est un client qui va voir ailleurs. Et chaque devis fait à 21h, c'est du temps volé à votre famille.
         </p>
-      </div>
+      </Reveal>
 
-      <div className="mt-12 grid gap-5 md:grid-cols-3">
+      <RevealGroup className="mt-12 grid gap-5 md:grid-cols-3">
         {items.map((it) => (
-          <div
+          <motion.div
             key={it.title}
-            className="rounded-lg border border-border bg-surface p-6 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover"
+            variants={fadeUp}
+            whileHover={{ y: -4, transition: { duration: 0.2 } }}
+            className="group rounded-lg border border-border bg-surface p-6 transition-shadow duration-200 hover:shadow-card-hover"
           >
-            <div className="grid h-9 w-9 place-items-center rounded-md bg-destructive/10 font-display text-destructive">
-              ✕
+            <div className="grid h-9 w-9 place-items-center rounded-md bg-destructive/10 transition-transform duration-200 group-hover:rotate-12">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4 stroke-destructive"
+                fill="none"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+              >
+                <motion.line
+                  x1="6"
+                  y1="6"
+                  x2="18"
+                  y2="18"
+                  initial={{ pathLength: 0 }}
+                  whileInView={{ pathLength: 1 }}
+                  viewport={{ once: true, margin: "-10% 0px" }}
+                  transition={{ duration: 0.4, delay: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                />
+                <motion.line
+                  x1="18"
+                  y1="6"
+                  x2="6"
+                  y2="18"
+                  initial={{ pathLength: 0 }}
+                  whileInView={{ pathLength: 1 }}
+                  viewport={{ once: true, margin: "-10% 0px" }}
+                  transition={{ duration: 0.4, delay: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                />
+              </svg>
             </div>
             <h3 className="mt-5 text-[18px] font-semibold leading-snug">{it.title}</h3>
             <p className="mt-2 text-sm text-muted-foreground">{it.body}</p>
-          </div>
+          </motion.div>
         ))}
-      </div>
+      </RevealGroup>
     </div>
   </section>
 );

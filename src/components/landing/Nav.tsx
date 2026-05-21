@@ -35,7 +35,6 @@ const Nav = () => {
           {[
             { href: "#probleme", label: "Le problème" },
             { href: "#solution", label: "Solution" },
-            { href: "#tarifs", label: "Tarifs" },
             { href: "#faq", label: "FAQ" },
             { href: "#contact", label: "Contact" },
           ].map((l) => (

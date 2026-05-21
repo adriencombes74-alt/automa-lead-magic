@@ -18,11 +18,13 @@ No test framework is configured. There is no Docker or CI/CD setup.
 Frontend env vars (loaded by Vite, must be prefixed `VITE_`):
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_GOOGLE_PLACES_API_KEY` — optional. Enables Google Places autocomplete on the signup address field ([src/components/signup/AddressAutocomplete.tsx](src/components/signup/AddressAutocomplete.tsx)). If absent the component falls back to 3 manual inputs (street/city/postal). Restrict the key to allowed HTTP referrers in Google Cloud Console.
 
-Edge function secrets (set via `supabase secrets set`, never exposed to client):
+Edge function secrets (set via Supabase Dashboard → Edge Functions → Secrets, never exposed to client):
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — auto-injected by Supabase
 - `GEMINI_API_KEY` — Google Gemini 2.0 Flash
-- `BREVO_API_KEY`, `BREVO_SENDER` (SMS), `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` — Brevo for SMS reminders + email confirmations
+- `BREVO_API_KEY`, `BREVO_SENDER` (SMS), `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` — Brevo for SMS reminders + email confirmations. ⚠️ Brevo's IP allowlist must be disabled (https://app.brevo.com/security/authorised_ips) — Supabase Edge Functions use dynamic IPs.
+- `CALENDLY_URL` (default `https://calendly.com/automobilelead-ia/configurer-mon-assistant-autolead-ai`), `ADMIN_NOTIFICATION_EMAIL` (default `adriencombes74@gmail.com`), `APP_URL` (default `https://autolead-nu.vercel.app`) — used by `send-welcome-email`
 - Cron secret retrieved server-side via `get_reminder_cron_secret()` PG function
 
 ## Architecture
@@ -66,6 +68,19 @@ When Gemini detects `intent: 'rdv'`, the chat function applies **server-side val
 
 `rendez_vous` rows store denormalized client contact (`client_name/phone/email`), `notes` (one-line summary of the client's request, extracted by Gemini), and `confirmation_sent_at`. The dashboard agenda ([src/pages/dashboard/Rdv.tsx](src/pages/dashboard/Rdv.tsx)) uses these fields directly so the garage owner sees full context without joins.
 
+### Signup flow
+
+5-step premium signup in [src/pages/Signup.tsx](src/pages/Signup.tsx):
+1. **Compte** — email + password
+2. **Garage** — name, phone (required, FR format), address (Google Places autocomplete with manual fallback), website (optional)
+3. **Services** — multi-select from [src/lib/serviceCatalog.ts](src/lib/serviceCatalog.ts) (5 defaults pre-checked); skippable via "On le fait pour vous"
+4. **Horaires** — 7-day editable schedule (defaults from `DEFAULT_OPENING_HOURS`); same skip option
+5. **Démarrage** — success screen with inline Calendly embed for 15-min config call + dashboard CTA
+
+`AuthContext.signUp(email, password, profile, config)` takes the full multi-step payload and inserts `users` + `garage_configs` + `subscriptions`. After success, [src/pages/Signup.tsx](src/pages/Signup.tsx) invokes `send-welcome-email` fire-and-forget with `{ help_requested: { services, hours } }` flags — when any flag is true, the admin notification email gets a warning banner so Adrien knows to follow up manually.
+
+Form state is persisted in `localStorage` under `autolead-signup-draft` (passwords stripped before save). Cleared after successful signup.
+
 ### Edge functions
 
 Located in [supabase/functions/](supabase/functions/):
@@ -74,6 +89,7 @@ Located in [supabase/functions/](supabase/functions/):
 |---|---|
 | `chat` | Public chatbot entry point — Gemini orchestration + devis/RDV creation |
 | `send-rdv-confirmation` | HTTP-invoked: sends email confirmation via Brevo when a RDV is created with a client email |
+| `send-welcome-email` | JWT-required: sends garagiste welcome email (widget snippet + Calendly CTA) + admin notification on signup. Accepts `{ help_requested: { services?, hours? } }` body to flag accounts needing manual config |
 | `send-reminders` | Cron-invoked (`x-cron-secret` header): sends maintenance SMS reminders via Brevo |
 | `parse-tariffs` | Auth-required: parses uploaded tariff sheets |
 | `plan-seasonal-tires` | Auth-required: schedules seasonal tire reminders |
@@ -84,7 +100,7 @@ Deploy with `supabase functions deploy <name>`. Migrations apply with `supabase 
 
 | Table | Purpose |
 |---|---|
-| `users` | Garage tenants — one row per garage, `id = auth.uid()` |
+| `users` | Garage tenants — one row per garage, `id = auth.uid()`. Fields: `garage_name`, `phone` (NOT NULL, FR format), `address`, `city`, `postal_code`, `website` |
 | `garage_configs` | JSONB blob per garage: services (with `duration_min`), labor rate, opening hours, widget branding, widget_token |
 | `subscriptions` | Stripe subscription state + monthly usage counters |
 | `clients` | Prospect contacts scoped to a garage; unique on `(garage_id, phone)` |
@@ -95,7 +111,7 @@ Deploy with `supabase functions deploy <name>`. Migrations apply with `supabase 
 | `reminders` | Scheduled SMS reminders (revision/pneus_hiver/pneus_ete), populated by trigger when RDV completed |
 | `usage_logs` | Audit trail per garage |
 
-Schema lives in [supabase/migrations/](supabase/migrations/): `001_initial_schema.sql`, `002_tariffs_storage.sql`, `003_reminders.sql`, `004_rdv_enhancements.sql`. RLS policy on every tenant-scoped table: `auth.uid() = garage_id`.
+Schema lives in [supabase/migrations/](supabase/migrations/): `001_initial_schema.sql`, `002_tariffs_storage.sql`, `003_reminders.sql`, `004_rdv_enhancements.sql`, `005_signup_fields.sql`. RLS policy on every tenant-scoped table: `auth.uid() = garage_id`.
 
 ### Frontend structure
 

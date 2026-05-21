@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type TypewriterProps = {
   text: string;
@@ -19,6 +19,8 @@ const Typewriter = ({
 }: TypewriterProps) => {
   const [shown, setShown] = useState("");
   const [done, setDone] = useState(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     if (!start) return;
@@ -31,11 +33,11 @@ const Typewriter = ({
       if (i >= text.length) {
         clearInterval(id);
         setDone(true);
-        onDone?.();
+        onDoneRef.current?.();
       }
     }, speed);
     return () => clearInterval(id);
-  }, [text, speed, start, onDone]);
+  }, [text, speed, start]);
 
   return (
     <span className={className}>

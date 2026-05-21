@@ -1,6 +1,20 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { Session, User } from '@supabase/supabase-js'
-import { supabase, GarageProfile } from '@/lib/supabase'
+import { supabase, GarageProfile, Service, OpeningHours } from '@/lib/supabase'
+
+export type SignUpProfile = {
+  garageName: string
+  phone: string
+  address: string
+  city: string
+  postalCode: string
+  website?: string
+}
+
+export type SignUpConfig = {
+  services: Service[]
+  openingHours: OpeningHours
+}
 
 type AuthContextType = {
   session: Session | null
@@ -8,7 +22,7 @@ type AuthContextType = {
   garageProfile: GarageProfile | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
-  signUp: (email: string, password: string, garageName: string, phone?: string) => Promise<{ error: string | null }>
+  signUp: (email: string, password: string, profile: SignUpProfile, config: SignUpConfig) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<{ error: string | null }>
   updatePassword: (newPassword: string) => Promise<{ error: string | null }>
@@ -57,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null }
   }
 
-  async function signUp(email: string, password: string, garageName: string, phone?: string) {
+  async function signUp(email: string, password: string, profile: SignUpProfile, config: SignUpConfig) {
     const { data, error } = await supabase.auth.signUp({ email, password })
     if (error || !data.user) return { error: error?.message ?? 'Erreur lors de la création du compte' }
 
@@ -65,8 +79,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     await supabase.from('users').insert({
       id: userId,
-      garage_name: garageName,
-      phone: phone ?? null,
+      garage_name: profile.garageName,
+      phone: profile.phone,
+      address: profile.address,
+      city: profile.city,
+      postal_code: profile.postalCode,
+      website: profile.website ?? null,
     })
 
     await supabase.from('garage_configs').insert({
@@ -76,16 +94,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         widget_color: '#2563eb',
         widget_position: 'bottom-right',
         labor_rate: 75,
-        services: [],
-        opening_hours: {
-          lundi: { open: '08:00', close: '18:00', closed: false },
-          mardi: { open: '08:00', close: '18:00', closed: false },
-          mercredi: { open: '08:00', close: '18:00', closed: false },
-          jeudi: { open: '08:00', close: '18:00', closed: false },
-          vendredi: { open: '08:00', close: '18:00', closed: false },
-          samedi: { open: '08:00', close: '12:00', closed: false },
-          dimanche: { open: '08:00', close: '12:00', closed: true },
-        },
+        services: config.services,
+        opening_hours: config.openingHours,
       },
     })
 

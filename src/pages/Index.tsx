@@ -5,7 +5,6 @@ import Solution from "@/components/landing/Solution";
 import Comment from "@/components/landing/Comment";
 import Demo from "@/components/landing/Demo";
 import Benefices from "@/components/landing/Benefices";
-import Pricing from "@/components/landing/Pricing";
 import Faq from "@/components/landing/Faq";
 import FinalCta from "@/components/landing/FinalCta";
 import Contact from "@/components/landing/Contact";
@@ -21,7 +20,6 @@ const Index = () => {
       <Comment />
       <Demo />
       <Benefices />
-      <Pricing />
       <Faq />
       <FinalCta />
       <Contact />

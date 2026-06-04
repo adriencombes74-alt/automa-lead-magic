@@ -1,3 +1,8 @@
+// Planifie les reminders SMS saisonniers pneus (hiver/été) pour chaque garage.
+// Cron: '0 5 * * *' déclenche cette fonction quotidiennement.
+// Chaque garage choisit ses dates d'envoi (config.reminder_frequencies.pneus_hiver/ete.send_month/day).
+// Le reminder est créé quand la date du jour tombe dans une fenêtre ±3 jours autour de la date configurée.
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -7,23 +12,42 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const SEASONAL_WINDOW_DAYS = 3
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-type SeasonInfo = { type: 'pneus_hiver' | 'pneus_ete'; sendDate: Date; year: number } | null
+type SeasonalType = 'pneus_hiver' | 'pneus_ete'
 
-function determineUpcomingSeason(today: Date): SeasonInfo {
-  const month = today.getMonth() + 1
-  const day = today.getDate()
-  const year = today.getFullYear()
+type SeasonalCfg = {
+  enabled?: boolean
+  send_month?: number
+  send_day?: number
+}
 
-  if (month === 8 || (month === 9 && day <= 15)) {
-    return { type: 'pneus_hiver', sendDate: new Date(Date.UTC(year, 8, 15, 9, 0, 0)), year }
-  }
-  if (month === 2 || (month === 3 && day <= 15)) {
-    return { type: 'pneus_ete', sendDate: new Date(Date.UTC(year, 2, 15, 9, 0, 0)), year }
-  }
-  return null
+type GarageConfig = {
+  garage_id: string
+  config: {
+    services?: Array<{ label: string; reminder_type?: string }>
+    reminder_frequencies?: {
+      pneus_hiver?: SeasonalCfg
+      pneus_ete?: SeasonalCfg
+    }
+  } | null
+}
+
+type CompletedRdv = {
+  garage_id: string
+  client_id: string
+  service: string | null
+  vehicle: { brand?: string; model?: string } | null
+  scheduled_at: string
+  clients: { id: string; sms_consent: boolean; phone: string | null }
+}
+
+function isWithinWindow(today: Date, month: number, day: number, year: number): boolean {
+  const target = new Date(Date.UTC(year, month - 1, day))
+  const diffMs = Math.abs(today.getTime() - target.getTime())
+  return diffMs <= SEASONAL_WINDOW_DAYS * 24 * 60 * 60 * 1000
 }
 
 async function verifyCronSecret(provided: string | null): Promise<boolean> {
@@ -49,15 +73,60 @@ Deno.serve(async (req) => {
 
   try {
     const today = new Date()
-    const season = determineUpcomingSeason(today)
-    if (!season) {
+    const year = today.getUTCFullYear()
+
+    // Charger toutes les configs avec leurs reminder_frequencies
+    const { data: configs, error: cfgErr } = await supabase
+      .from('garage_configs')
+      .select('garage_id, config')
+      .returns<GarageConfig[]>()
+
+    if (cfgErr) throw cfgErr
+
+    // Déterminer pour chaque garage quel type de pneu (si applicable) doit être planifié aujourd'hui
+    type GarageJob = { garageId: string; type: SeasonalType; sendDate: Date; year: number }
+    const jobs: GarageJob[] = []
+
+    for (const cfg of configs ?? []) {
+      const freqs = cfg.config?.reminder_frequencies
+      if (!freqs) continue
+
+      for (const type of ['pneus_hiver', 'pneus_ete'] as const) {
+        const seasonal = freqs[type]
+        if (!seasonal?.enabled) continue
+        const month = seasonal.send_month ?? (type === 'pneus_hiver' ? 10 : 4)
+        const day = seasonal.send_day ?? 1
+        if (!isWithinWindow(today, month, day, year)) continue
+
+        // Schedule pour 9h UTC du jour cible
+        const sendDate = new Date(Date.UTC(year, month - 1, day, 9, 0, 0))
+        jobs.push({ garageId: cfg.garage_id, type, sendDate, year })
+      }
+    }
+
+    if (jobs.length === 0) {
       return new Response(
-        JSON.stringify({ ok: true, skipped: true, reason: 'Hors fenêtre saisonnière' }),
+        JSON.stringify({ ok: true, skipped: true, reason: 'Aucun garage avec date saisonnière proche' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Récupérer tous les RDV "completed" sur les 12 derniers mois dont le service est de type pneus
+    const garageIds = [...new Set(jobs.map(j => j.garageId))]
+
+    // Map garage_id → set des labels de service marqués 'pneus'
+    const tireServicesByGarage = new Map<string, Set<string>>()
+    for (const cfg of configs ?? []) {
+      if (!garageIds.includes(cfg.garage_id)) continue
+      const set = new Set<string>()
+      for (const svc of cfg.config?.services ?? []) {
+        if (svc.label && svc.reminder_type === 'pneus') {
+          set.add(svc.label.toLowerCase())
+        }
+      }
+      tireServicesByGarage.set(cfg.garage_id, set)
+    }
+
+    // Récupérer les RDV completed des 12 derniers mois pour ces garages
     const oneYearAgo = new Date()
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
 
@@ -66,94 +135,60 @@ Deno.serve(async (req) => {
       .select('garage_id, client_id, service, vehicle, scheduled_at, clients!inner(id, sms_consent, phone)')
       .eq('status', 'completed')
       .gte('scheduled_at', oneYearAgo.toISOString())
+      .in('garage_id', garageIds)
       .not('client_id', 'is', null)
-      .returns<Array<{
-        garage_id: string
-        client_id: string
-        service: string | null
-        vehicle: { brand?: string; model?: string } | null
-        scheduled_at: string
-        clients: { id: string; sms_consent: boolean; phone: string | null }
-      }>>()
+      .returns<CompletedRdv[]>()
 
     if (rdvErr) throw rdvErr
 
-    // Récupérer les configs des garages pour mapper service -> reminder_type
-    const garageIds = [...new Set((rdvs ?? []).map(r => r.garage_id))]
-    const { data: configs } = await supabase
-      .from('garage_configs')
-      .select('garage_id, config')
-      .in('garage_id', garageIds)
-
-    const serviceTypeByGarage = new Map<string, Map<string, string>>()
-    for (const c of configs ?? []) {
-      const services = (c.config?.services ?? []) as Array<{ label: string; reminder_type?: string }>
-      const map = new Map<string, string>()
-      for (const svc of services) {
-        if (svc.label && svc.reminder_type) {
-          map.set(svc.label.toLowerCase(), svc.reminder_type)
-        }
-      }
-      serviceTypeByGarage.set(c.garage_id, map)
-    }
-
-    // Sélectionner les clients éligibles (pneus + consent + phone)
-    const eligibleClients = new Map<string, {
-      garage_id: string
-      client_id: string
-      vehicle: { brand?: string; model?: string } | null
-    }>()
-
-    for (const rdv of rdvs ?? []) {
-      if (!rdv.service || !rdv.clients?.sms_consent || !rdv.clients?.phone) continue
-      const serviceMap = serviceTypeByGarage.get(rdv.garage_id)
-      if (!serviceMap) continue
-      const type = serviceMap.get(rdv.service.toLowerCase())
-      if (type !== 'pneus') continue
-
-      // Garder le rdv le plus récent par client
-      const key = rdv.client_id
-      if (!eligibleClients.has(key)) {
-        eligibleClients.set(key, {
-          garage_id: rdv.garage_id,
-          client_id: rdv.client_id,
-          vehicle: rdv.vehicle,
-        })
-      }
-    }
-
-    // Insérer les rappels (idempotent via unique index sur client_id + reminder_type + season_year)
+    // Pour chaque job (garage × type), trouver les clients éligibles et insérer les reminders
     let created = 0
     let skipped = 0
-    for (const entry of eligibleClients.values()) {
-      const { error: insertErr } = await supabase.from('reminders').insert({
-        garage_id: entry.garage_id,
-        client_id: entry.client_id,
-        vehicle: entry.vehicle,
-        service_label: null,
-        reminder_type: season.type,
-        scheduled_at: season.sendDate.toISOString(),
-        status: 'pending',
-        season_year: season.year,
-      })
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          skipped++
-        } else {
-          console.error('Insert error:', insertErr)
+
+    for (const job of jobs) {
+      const tireLabels = tireServicesByGarage.get(job.garageId)
+      if (!tireLabels || tireLabels.size === 0) continue
+
+      const eligibleClients = new Map<string, { vehicle: CompletedRdv['vehicle'] }>()
+
+      for (const rdv of rdvs ?? []) {
+        if (rdv.garage_id !== job.garageId) continue
+        if (!rdv.service || !rdv.clients?.sms_consent || !rdv.clients?.phone) continue
+        if (!tireLabels.has(rdv.service.toLowerCase())) continue
+
+        if (!eligibleClients.has(rdv.client_id)) {
+          eligibleClients.set(rdv.client_id, { vehicle: rdv.vehicle })
         }
-      } else {
-        created++
+      }
+
+      for (const [clientId, entry] of eligibleClients) {
+        const { error: insertErr } = await supabase.from('reminders').insert({
+          garage_id: job.garageId,
+          client_id: clientId,
+          vehicle: entry.vehicle,
+          service_label: null,
+          reminder_type: job.type,
+          scheduled_at: job.sendDate.toISOString(),
+          status: 'pending',
+          season_year: job.year,
+        })
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            skipped++
+          } else {
+            console.error('Insert error:', insertErr)
+          }
+        } else {
+          created++
+        }
       }
     }
 
     return new Response(
       JSON.stringify({
         ok: true,
-        season: season.type,
-        season_year: season.year,
-        send_date: season.sendDate.toISOString(),
-        eligible: eligibleClients.size,
+        jobs_evaluated: jobs.length,
+        garages_targeted: garageIds.length,
         created,
         skipped,
       }),

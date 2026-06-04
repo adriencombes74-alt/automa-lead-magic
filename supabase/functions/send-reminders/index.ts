@@ -1,3 +1,8 @@
+// Envoi horaire des SMS de rappels via Twilio.
+// Cron: '0 * * * *' déclenche cette fonction avec un header X-Cron-Secret.
+// Récupère les reminders pending échus, compose le SMS depuis le template du garage,
+// envoie via Twilio, et met à jour le statut (sent/failed) dans `reminders`.
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -7,11 +12,14 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const BREVO_API_KEY = Deno.env.get('BREVO_API_KEY')
-const BREVO_SENDER = Deno.env.get('BREVO_SENDER') ?? 'AutoLead'
+const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID')
+const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN')
+const TWILIO_FROM_NUMBER = Deno.env.get('TWILIO_FROM_NUMBER')
 const BATCH_LIMIT = 100
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+type ReminderType = 'revision' | 'pneus_hiver' | 'pneus_ete'
 
 type Reminder = {
   id: string
@@ -19,10 +27,28 @@ type Reminder = {
   client_id: string
   vehicle: { brand?: string; model?: string } | null
   service_label: string | null
-  reminder_type: 'revision' | 'pneus_hiver' | 'pneus_ete'
+  reminder_type: ReminderType
   scheduled_at: string
   clients: { name: string | null; phone: string | null; sms_consent: boolean } | null
   users: { garage_name: string; phone: string | null } | null
+}
+
+type ReminderTemplateConfig = {
+  enabled?: boolean
+  sms_template?: string
+}
+
+type GarageConfigRow = {
+  config: {
+    reminder_frequencies?: Partial<Record<ReminderType, ReminderTemplateConfig>>
+  } | null
+}
+
+// Fallback templates si le garage n'a pas de config (compte ancien jamais migré, etc.)
+const FALLBACK_TEMPLATES: Record<ReminderType, string> = {
+  revision: "Bonjour {client_name}, votre {vehicle} a ete revise chez {garage_name} il y a 1 an. Pensez au prochain entretien. Tel: {phone}. STOP au 36180.",
+  pneus_hiver: "Bonjour {client_name}, l'hiver approche ! Pensez a monter vos pneus hiver chez {garage_name}. Tel: {phone}. STOP au 36180.",
+  pneus_ete: "Bonjour {client_name}, le printemps est la ! Pensez a remonter vos pneus ete chez {garage_name}. Tel: {phone}. STOP au 36180.",
 }
 
 function normalizePhoneFr(raw: string | null): string | null {
@@ -40,48 +66,61 @@ function firstName(full: string | null): string {
   return full.trim().split(/\s+/)[0]
 }
 
-function buildMessage(r: Reminder): string {
-  const prenom = firstName(r.clients?.name ?? null)
-  const greeting = prenom ? `Bonjour ${prenom}` : 'Bonjour'
-  const garageName = r.users?.garage_name ?? 'votre garage'
-  const garagePhone = r.users?.phone ?? ''
-  const phoneSuffix = garagePhone ? ` Tel: ${garagePhone}` : ''
-  const stop = ' STOP au 36180.'
-
-  if (r.reminder_type === 'revision') {
-    const vehicleName = r.vehicle?.brand ? r.vehicle.brand : 'votre vehicule'
-    return `${greeting}, ${vehicleName} a ete revisee chez ${garageName} il y a 1 an. Pensez au prochain entretien.${phoneSuffix}${stop}`
-  }
-  if (r.reminder_type === 'pneus_hiver') {
-    return `${greeting}, l'hiver approche ! Pensez a monter vos pneus hiver chez ${garageName}.${phoneSuffix}${stop}`
-  }
-  return `${greeting}, le printemps est la ! Pensez a remonter vos pneus ete chez ${garageName}.${phoneSuffix}${stop}`
+function vehicleLabel(vehicle: Reminder['vehicle']): string {
+  if (!vehicle) return 'votre vehicule'
+  const parts = [vehicle.brand, vehicle.model].filter(Boolean)
+  return parts.length ? parts.join(' ') : 'votre vehicule'
 }
 
-async function sendBrevoSms(to: string, content: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  if (!BREVO_API_KEY) {
-    return { success: false, error: 'BREVO_API_KEY non configurée' }
+function renderTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? '')
+}
+
+function buildMessage(reminder: Reminder, template: string): string {
+  return renderTemplate(template, {
+    client_name: firstName(reminder.clients?.name ?? null),
+    garage_name: reminder.users?.garage_name ?? 'votre garage',
+    vehicle: vehicleLabel(reminder.vehicle),
+    phone: reminder.users?.phone ?? '',
+  })
+}
+
+async function loadGarageTemplate(garageId: string, type: ReminderType): Promise<string> {
+  const { data, error } = await supabase
+    .from('garage_configs')
+    .select('config')
+    .eq('garage_id', garageId)
+    .single<GarageConfigRow>()
+
+  if (error || !data?.config?.reminder_frequencies?.[type]?.sms_template) {
+    return FALLBACK_TEMPLATES[type]
+  }
+  return data.config.reminder_frequencies[type]!.sms_template!
+}
+
+async function sendTwilioSms(to: string, body: string): Promise<{ success: boolean; sid?: string; error?: string }> {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM_NUMBER) {
+    return { success: false, error: 'Twilio non configuré (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER manquants)' }
   }
   try {
-    const res = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
-      method: 'POST',
-      headers: {
-        'api-key': BREVO_API_KEY,
-        'Content-Type': 'application/json',
-        accept: 'application/json',
+    const auth = btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)
+    const form = new URLSearchParams({ To: to, From: TWILIO_FROM_NUMBER, Body: body })
+    const res = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: form,
       },
-      body: JSON.stringify({
-        sender: BREVO_SENDER,
-        recipient: to,
-        content,
-        type: 'transactional',
-      }),
-    })
+    )
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       return { success: false, error: data?.message ?? `HTTP ${res.status}` }
     }
-    return { success: true, messageId: data?.reference ?? data?.messageId ?? null }
+    return { success: true, sid: data?.sid ?? null }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Erreur réseau' }
   }
@@ -145,15 +184,16 @@ Deno.serve(async (req) => {
         continue
       }
 
-      const message = buildMessage(reminder)
-      const sendResult = await sendBrevoSms(phone, message)
+      const template = await loadGarageTemplate(reminder.garage_id, reminder.reminder_type)
+      const message = buildMessage(reminder, template)
+      const sendResult = await sendTwilioSms(phone, message)
 
       if (sendResult.success) {
         await supabase.from('reminders').update({
           status: 'sent',
           sent_at: new Date().toISOString(),
           message_body: message,
-          brevo_message_id: sendResult.messageId ?? null,
+          provider_message_id: sendResult.sid ?? null,
         }).eq('id', reminder.id)
         results.sent++
       } else {

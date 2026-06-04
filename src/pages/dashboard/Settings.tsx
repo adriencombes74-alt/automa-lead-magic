@@ -1,18 +1,21 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, Check, Plus, Trash2, Upload, FileText, Loader2 } from 'lucide-react'
-import { supabase, GarageConfig, Service } from '@/lib/supabase'
+import { supabase, GarageConfig, Service, ReminderFrequencies } from '@/lib/supabase'
+import { DEFAULT_REMINDER_FREQUENCIES } from '@/lib/serviceCatalog'
 import { useAuth } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 const MAX_PDF_SIZE_MB = 15
@@ -73,6 +76,19 @@ export default function DashboardSettings() {
 
   useEffect(() => {
     if (config?.config?.services) setServices(config.config.services)
+  }, [config])
+
+  // Reminders tab state
+  const [reminderFreqs, setReminderFreqs] = useState<ReminderFrequencies>(DEFAULT_REMINDER_FREQUENCIES)
+
+  useEffect(() => {
+    if (config?.config?.reminder_frequencies) {
+      setReminderFreqs({
+        revision: { ...DEFAULT_REMINDER_FREQUENCIES.revision!, ...config.config.reminder_frequencies.revision },
+        pneus_hiver: { ...DEFAULT_REMINDER_FREQUENCIES.pneus_hiver!, ...config.config.reminder_frequencies.pneus_hiver },
+        pneus_ete: { ...DEFAULT_REMINDER_FREQUENCIES.pneus_ete!, ...config.config.reminder_frequencies.pneus_ete },
+      })
+    }
   }, [config])
 
   // PDF tariff import state
@@ -200,6 +216,18 @@ export default function DashboardSettings() {
     },
   })
 
+  const saveReminders = useMutation({
+    mutationFn: async () => {
+      await supabase.from('garage_configs').update({
+        config: { ...config?.config, reminder_frequencies: reminderFreqs },
+      }).eq('garage_id', garageId!)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['garage-config', garageId] })
+      toast.success('Rappels SMS sauvegardés')
+    },
+  })
+
   function addService() {
     setServices(prev => [...prev, {
       id: `svc-${Date.now()}`,
@@ -239,6 +267,7 @@ export default function DashboardSettings() {
         <TabsList>
           <TabsTrigger value="garage">Garage</TabsTrigger>
           <TabsTrigger value="services">Services</TabsTrigger>
+          <TabsTrigger value="reminders">Rappels SMS</TabsTrigger>
           <TabsTrigger value="widget">Widget</TabsTrigger>
         </TabsList>
 
@@ -376,6 +405,19 @@ export default function DashboardSettings() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Tab Reminders */}
+        <TabsContent value="reminders" className="space-y-4 mt-4">
+          <RemindersConfig
+            freqs={reminderFreqs}
+            onChange={setReminderFreqs}
+            garageName={garageName || 'votre garage'}
+            garagePhone={phone || '01 23 45 67 89'}
+          />
+          <Button onClick={() => saveReminders.mutate()} disabled={saveReminders.isPending}>
+            {saveReminders.isPending ? 'Sauvegarde…' : 'Sauvegarder les rappels'}
+          </Button>
         </TabsContent>
 
         {/* Tab Widget */}
@@ -540,5 +582,255 @@ export default function DashboardSettings() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// ============================================================
+// RemindersConfig — éditeur des rappels SMS (révision + pneus)
+// ============================================================
+
+const SMS_PLACEHOLDERS = [
+  { key: '{client_name}', label: 'Prénom du client' },
+  { key: '{vehicle}', label: 'Véhicule (marque + modèle)' },
+  { key: '{garage_name}', label: 'Nom du garage' },
+  { key: '{phone}', label: 'Téléphone du garage' },
+]
+
+const MONTHS_FR = [
+  'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
+]
+
+function renderPreview(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`)
+}
+
+function RemindersConfig({
+  freqs,
+  onChange,
+  garageName,
+  garagePhone,
+}: {
+  freqs: ReminderFrequencies
+  onChange: (next: ReminderFrequencies) => void
+  garageName: string
+  garagePhone: string
+}) {
+  const previewVars = useMemo(() => ({
+    client_name: 'Jean',
+    vehicle: 'Renault Clio',
+    garage_name: garageName,
+    phone: garagePhone,
+  }), [garageName, garagePhone])
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-[15px]">Comment ça marche ?</CardTitle>
+          <CardDescription>
+            Les rappels sont envoyés automatiquement par SMS aux clients ayant donné leur consentement. Vous pouvez activer/désactiver chaque type, choisir la fréquence, et personnaliser le message.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      <RevisionCard
+        cfg={freqs.revision ?? DEFAULT_REMINDER_FREQUENCIES.revision!}
+        onChange={r => onChange({ ...freqs, revision: r })}
+        previewVars={previewVars}
+      />
+
+      <SeasonalCard
+        title="Pneus hiver"
+        description="Rappel envoyé aux clients ayant fait monter des pneus dans les 12 derniers mois."
+        cfg={freqs.pneus_hiver ?? DEFAULT_REMINDER_FREQUENCIES.pneus_hiver!}
+        onChange={r => onChange({ ...freqs, pneus_hiver: r })}
+        previewVars={previewVars}
+      />
+
+      <SeasonalCard
+        title="Pneus été"
+        description="Rappel envoyé aux clients ayant fait monter des pneus dans les 12 derniers mois."
+        cfg={freqs.pneus_ete ?? DEFAULT_REMINDER_FREQUENCIES.pneus_ete!}
+        onChange={r => onChange({ ...freqs, pneus_ete: r })}
+        previewVars={previewVars}
+      />
+    </div>
+  )
+}
+
+function PlaceholderHelp() {
+  return (
+    <div className="rounded-md bg-muted/40 px-3 py-2">
+      <p className="text-[11px] font-medium text-muted-foreground mb-1">Placeholders disponibles :</p>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {SMS_PLACEHOLDERS.map(p => (
+          <span key={p.key} className="text-[11px] text-muted-foreground">
+            <code className="rounded bg-background px-1 py-0.5 text-[10px] font-mono">{p.key}</code>
+            <span className="ml-1">{p.label}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SmsTextarea({
+  value,
+  onChange,
+  previewVars,
+}: {
+  value: string
+  onChange: (v: string) => void
+  previewVars: Record<string, string>
+}) {
+  const preview = renderPreview(value, previewVars)
+  const length = preview.length
+  const segments = length === 0 ? 0 : Math.ceil(length / 160)
+  const warning = length > 160
+
+  return (
+    <div className="space-y-2">
+      <Textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        rows={4}
+        className="font-mono text-[12px]"
+      />
+      <PlaceholderHelp />
+      <div className="rounded-md border border-border bg-muted/30 p-3">
+        <p className="text-[11px] font-medium text-muted-foreground mb-1">Aperçu (Jean — Renault Clio) :</p>
+        <p className="text-[13px] leading-relaxed">{preview}</p>
+      </div>
+      <p className={cn('text-[11px]', warning ? 'text-yellow-600' : 'text-muted-foreground')}>
+        {length} caractère{length > 1 ? 's' : ''} · {segments} SMS
+        {warning && ' — au-delà de 160 caractères, le SMS est facturé en plusieurs segments'}
+      </p>
+    </div>
+  )
+}
+
+function RevisionCard({
+  cfg,
+  onChange,
+  previewVars,
+}: {
+  cfg: NonNullable<ReminderFrequencies['revision']>
+  onChange: (cfg: NonNullable<ReminderFrequencies['revision']>) => void
+  previewVars: Record<string, string>
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-[15px]">Révision</CardTitle>
+            <CardDescription>
+              Rappel envoyé X mois après chaque révision marquée comme terminée dans l'agenda.
+            </CardDescription>
+          </div>
+          <Switch
+            checked={cfg.enabled}
+            onCheckedChange={v => onChange({ ...cfg, enabled: v })}
+          />
+        </div>
+      </CardHeader>
+      <CardContent className={cn('space-y-4', !cfg.enabled && 'opacity-50 pointer-events-none')}>
+        <div className="space-y-1.5">
+          <Label className="text-[13px]">Intervalle (en mois)</Label>
+          <div className="flex items-center gap-3">
+            <Input
+              type="number"
+              min={1}
+              max={60}
+              value={cfg.interval_months}
+              onChange={e => onChange({ ...cfg, interval_months: Math.max(1, Math.min(60, +e.target.value || 12)) })}
+              className="w-24"
+            />
+            <span className="text-[13px] text-muted-foreground">
+              {cfg.interval_months === 12 ? '= 1 an' : cfg.interval_months === 24 ? '= 2 ans' : `= ${(cfg.interval_months / 12).toFixed(1)} an(s)`}
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[13px]">Message SMS</Label>
+          <SmsTextarea
+            value={cfg.sms_template}
+            onChange={v => onChange({ ...cfg, sms_template: v })}
+            previewVars={previewVars}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SeasonalCard({
+  title,
+  description,
+  cfg,
+  onChange,
+  previewVars,
+}: {
+  title: string
+  description: string
+  cfg: NonNullable<ReminderFrequencies['pneus_hiver']>
+  onChange: (cfg: NonNullable<ReminderFrequencies['pneus_hiver']>) => void
+  previewVars: Record<string, string>
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-[15px]">{title}</CardTitle>
+            <CardDescription>{description}</CardDescription>
+          </div>
+          <Switch
+            checked={cfg.enabled}
+            onCheckedChange={v => onChange({ ...cfg, enabled: v })}
+          />
+        </div>
+      </CardHeader>
+      <CardContent className={cn('space-y-4', !cfg.enabled && 'opacity-50 pointer-events-none')}>
+        <div className="space-y-1.5">
+          <Label className="text-[13px]">Date d'envoi annuelle</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={31}
+              value={cfg.send_day}
+              onChange={e => onChange({ ...cfg, send_day: Math.max(1, Math.min(31, +e.target.value || 1)) })}
+              className="w-20"
+            />
+            <Select
+              value={String(cfg.send_month)}
+              onValueChange={v => onChange({ ...cfg, send_month: +v })}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS_FR.map((m, i) => (
+                  <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-[12px] text-muted-foreground">de chaque année</span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[13px]">Message SMS</Label>
+          <SmsTextarea
+            value={cfg.sms_template}
+            onChange={v => onChange({ ...cfg, sms_template: v })}
+            previewVars={previewVars}
+          />
+        </div>
+      </CardContent>
+    </Card>
   )
 }

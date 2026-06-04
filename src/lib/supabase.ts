@@ -13,6 +13,25 @@ export type GarageProfile = {
   created_at: string
 }
 
+export type RevisionReminderConfig = {
+  enabled: boolean
+  interval_months: number
+  sms_template: string
+}
+
+export type SeasonalReminderConfig = {
+  enabled: boolean
+  send_month: number
+  send_day: number
+  sms_template: string
+}
+
+export type ReminderFrequencies = {
+  revision?: RevisionReminderConfig
+  pneus_hiver?: SeasonalReminderConfig
+  pneus_ete?: SeasonalReminderConfig
+}
+
 export type GarageConfig = {
   id: string
   garage_id: string
@@ -24,6 +43,7 @@ export type GarageConfig = {
     labor_rate?: number
     services?: Service[]
     opening_hours?: OpeningHours
+    reminder_frequencies?: ReminderFrequencies
   }
 }
 
@@ -112,6 +132,39 @@ export type Message = {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
+}
+
+export type VoiceTranscriptItem = {
+  role: 'agent' | 'user'
+  message: string | null
+  time_in_call_secs: number
+}
+
+// Appel de l'assistant vocal ElevenLabs (table `voice_calls`),
+// alimentée par le post-call webhook `elevenlabs-post-call`.
+export type VoiceCall = {
+  id: string
+  garage_id: string | null
+  elevenlabs_conversation_id: string
+  elevenlabs_agent_id: string | null
+  caller_phone: string | null
+  called_number: string | null
+  direction: string | null
+  status: string | null
+  call_successful: 'success' | 'failure' | 'unknown' | null
+  duration_secs: number | null
+  cost: number | null
+  started_at: string | null
+  transcript: VoiceTranscriptItem[]
+  summary: string | null
+  data_collected: Record<string, unknown> | null
+  evaluation: Record<string, unknown> | null
+  client_id: string | null
+  rdv_id: string | null
+  message_count: number | null
+  raw: unknown | null
+  created_at: string
+  clients?: Client
 }
 
 export type Devis = {

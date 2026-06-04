@@ -23,13 +23,14 @@ Frontend env vars (loaded by Vite, must be prefixed `VITE_`):
 Edge function secrets (set via Supabase Dashboard → Edge Functions → Secrets, never exposed to client):
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — auto-injected by Supabase
 - `GEMINI_API_KEY` — Google Gemini 2.0 Flash
-- `BREVO_API_KEY`, `BREVO_SENDER` (SMS), `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` — Brevo for SMS reminders + email confirmations. ⚠️ Brevo's IP allowlist must be disabled (https://app.brevo.com/security/authorised_ips) — Supabase Edge Functions use dynamic IPs.
+- `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME` — Brevo for **email** (welcome + RDV confirmation). ⚠️ Brevo's IP allowlist must be disabled (https://app.brevo.com/security/authorised_ips) — Supabase Edge Functions use dynamic IPs.
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` — Twilio for **SMS reminders** (revision/pneus). The `FROM` number must be SMS-capable (France: ~€1.15/month rental).
 - `CALENDLY_URL` (default `https://calendly.com/automobilelead-ia/configurer-mon-assistant-autolead-ai`), `ADMIN_NOTIFICATION_EMAIL` (default `adriencombes74@gmail.com`), `APP_URL` (default `https://autolead-nu.vercel.app`) — used by `send-welcome-email`
 - Cron secret retrieved server-side via `get_reminder_cron_secret()` PG function
 
 ## Architecture
 
-AutoLead AI is a multi-tenant B2B SaaS for French garage owners. **Stack: Vite + React + TypeScript + react-router-dom 6, Supabase (Postgres + Auth + Edge Functions), Google Gemini 2.0 Flash, Brevo (SMS + email), Stripe (planned).**
+AutoLead AI is a multi-tenant B2B SaaS for French garage owners. **Stack: Vite + React + TypeScript + react-router-dom 6, Supabase (Postgres + Auth + Edge Functions), Google Gemini 2.0 Flash, Brevo (email), Twilio (SMS), ElevenLabs + Twilio Voice (assistant vocal), Stripe (planned).**
 
 There is **no Next.js / no API routes layer**. The frontend is a single-page app served by Vite; backend logic lives in Supabase Edge Functions (`supabase/functions/`).
 
@@ -90,9 +91,9 @@ Located in [supabase/functions/](supabase/functions/):
 | `chat` | Public chatbot entry point — Gemini orchestration + devis/RDV creation |
 | `send-rdv-confirmation` | HTTP-invoked: sends email confirmation via Brevo when a RDV is created with a client email |
 | `send-welcome-email` | JWT-required: sends garagiste welcome email (widget snippet + Calendly CTA) + admin notification on signup. Accepts `{ help_requested: { services?, hours? } }` body to flag accounts needing manual config |
-| `send-reminders` | Cron-invoked (`x-cron-secret` header): sends maintenance SMS reminders via Brevo |
+| `send-reminders` | Cron-invoked (`x-cron-secret` header, hourly): sends maintenance SMS reminders **via Twilio**. Reads each garage's custom `sms_template` from `garage_configs.config.reminder_frequencies[type]`, substitutes placeholders (`{client_name}`, `{vehicle}`, `{garage_name}`, `{phone}`), and POSTs to Twilio Messages API. Updates `reminders.status` + `provider_message_id` (Twilio SID). Falls back to hardcoded templates if config missing. |
+| `plan-seasonal-tires` | Cron-invoked (`x-cron-secret` header, daily 5am): iterates each garage and creates seasonal tire reminders when today falls within ±3 days of the garage's configured `pneus_hiver.send_month/day` or `pneus_ete.send_month/day`. Eligibility: clients with `sms_consent=true` who had a tire-flagged RDV completed in the last 12 months. Deduplicated via `(client_id, reminder_type, season_year)` unique index. |
 | `parse-tariffs` | Auth-required: parses uploaded tariff sheets |
-| `plan-seasonal-tires` | Auth-required: schedules seasonal tire reminders |
 
 Deploy with `supabase functions deploy <name>`. Migrations apply with `supabase db push`.
 
@@ -101,17 +102,26 @@ Deploy with `supabase functions deploy <name>`. Migrations apply with `supabase 
 | Table | Purpose |
 |---|---|
 | `users` | Garage tenants — one row per garage, `id = auth.uid()`. Fields: `garage_name`, `phone` (NOT NULL, FR format), `address`, `city`, `postal_code`, `website` |
-| `garage_configs` | JSONB blob per garage: services (with `duration_min`), labor rate, opening hours, widget branding, widget_token |
+| `garage_configs` | JSONB blob per garage: services (with `duration_min`), labor rate, opening hours, widget branding, widget_token, **`reminder_frequencies`** (per-type on/off + interval/dates + SMS template) |
 | `subscriptions` | Stripe subscription state + monthly usage counters |
 | `clients` | Prospect contacts scoped to a garage; unique on `(garage_id, phone)` |
 | `conversations` | Full chat sessions, messages stored as JSONB array, intent enum |
 | `leads` | CRM pipeline; score 0-100 |
 | `devis` | Estimates with vehicle + line items as JSONB |
 | `rendez_vous` | Appointments — `scheduled_at`, `duration_min`, denormalized client contact, `notes`, `confirmation_sent_at`. Unique index on `(garage_id, reference)` |
-| `reminders` | Scheduled SMS reminders (revision/pneus_hiver/pneus_ete), populated by trigger when RDV completed |
+| `reminders` | Scheduled SMS reminders (revision/pneus_hiver/pneus_ete). Two creation paths: (1) DB trigger `create_revision_reminder()` on RDV completed → revision reminder at +N months from garage config; (2) `plan-seasonal-tires` cron → seasonal tire reminders. Provider-agnostic via `provider_message_id` (Twilio SID). Idempotency: unique index on `(source_rdv_id, reminder_type)` for revisions, `(client_id, reminder_type, season_year)` for seasonal |
 | `usage_logs` | Audit trail per garage |
 
-Schema lives in [supabase/migrations/](supabase/migrations/): `001_initial_schema.sql`, `002_tariffs_storage.sql`, `003_reminders.sql`, `004_rdv_enhancements.sql`, `005_signup_fields.sql`. RLS policy on every tenant-scoped table: `auth.uid() = garage_id`.
+Schema lives in [supabase/migrations/](supabase/migrations/): `001_initial_schema.sql`, `002_tariffs_storage.sql`, `003_reminders.sql`, `004_rdv_enhancements.sql`, `005_signup_fields.sql`, `006_reminder_config.sql`. RLS policy on every tenant-scoped table: `auth.uid() = garage_id`.
+
+### SMS reminders configuration
+
+Each garage controls its reminder cycle from `/dashboard/settings` → "Rappels SMS" tab:
+- **Révision** — on/off + interval in months (default 12) + custom SMS template. The `create_revision_reminder()` trigger reads `garage_configs.config.reminder_frequencies.revision.interval_months` at completion time.
+- **Pneus hiver / Pneus été** — on/off + send date (day + month, defaults Oct 1 / Apr 1) + custom SMS template. The `plan-seasonal-tires` cron iterates garages daily and creates reminders for clients within ±3 days of each garage's configured date.
+- **Templates** use placeholders `{client_name}`, `{vehicle}`, `{garage_name}`, `{phone}`. The Settings UI shows a live preview + character count (warning beyond 160 chars = multi-segment SMS billing).
+- Defaults shipped via `DEFAULT_REMINDER_FREQUENCIES` in [src/lib/serviceCatalog.ts](src/lib/serviceCatalog.ts), applied at signup in `AuthContext.signUp()` and backfilled for existing garages by migration 006.
+- Changing the configuration does NOT recalculate pending reminders — only future RDVs use the new values. Garagistes can cancel existing pending reminders from `/dashboard/reminders`.
 
 ### Frontend structure
 
@@ -123,7 +133,8 @@ Schema lives in [supabase/migrations/](supabase/migrations/): `001_initial_schem
 - [src/components/landing/](src/components/landing/) — landing page sections
 - [src/components/ui/](src/components/ui/) — shadcn/ui (base-nova style)
 - [src/contexts/AuthContext.tsx](src/contexts/AuthContext.tsx) — `useAuth()` hook (user, garageId, session)
-- [src/lib/supabase.ts](src/lib/supabase.ts) — frontend Supabase client + all shared TypeScript types (`RendezVous`, `Client`, `Conversation`, `Devis`, `Lead`, `GarageConfig`, etc.)
+- [src/lib/supabase.ts](src/lib/supabase.ts) — frontend Supabase client + all shared TypeScript types (`RendezVous`, `Client`, `Conversation`, `Devis`, `Lead`, `GarageConfig`, `ReminderFrequencies`, etc.)
+- [src/lib/serviceCatalog.ts](src/lib/serviceCatalog.ts) — `SERVICE_CATALOG` (8 default garage services with `duration_min` + `base_price`), `DEFAULT_OPENING_HOURS`, `DEFAULT_REMINDER_FREQUENCIES` — used by signup + applied at account creation
 
 Auth uses Supabase Auth with JWT. The dashboard layout reads `useAuth()` and redirects unauthenticated users.
 

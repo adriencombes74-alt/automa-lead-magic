@@ -1,5 +1,5 @@
 import { NavLink, Routes, Route, useNavigate } from 'react-router-dom'
-import { BarChart3, Bell, Calendar, FileText, LogOut, MessageSquare, Settings, Users } from 'lucide-react'
+import { BarChart3, Bell, Calendar, FileText, LogOut, MessageSquare, PhoneCall, Settings, Users } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import Overview from '@/pages/dashboard/Overview'
 import Leads from '@/pages/dashboard/Leads'
 import Conversations from '@/pages/dashboard/Conversations'
+import VoiceAssistant from '@/pages/dashboard/VoiceAssistant'
 import Devis from '@/pages/dashboard/Devis'
 import Rdv from '@/pages/dashboard/Rdv'
 import Reminders from '@/pages/dashboard/Reminders'
@@ -27,6 +28,7 @@ const navItems = [
   { to: '/dashboard', label: 'Tableau de bord', icon: BarChart3, end: true },
   { to: '/dashboard/leads', label: 'Leads', icon: Users },
   { to: '/dashboard/conversations', label: 'Conversations', icon: MessageSquare },
+  { to: '/dashboard/voice', label: 'Assistant vocal', icon: PhoneCall },
   { to: '/dashboard/devis', label: 'Devis', icon: FileText },
   { to: '/dashboard/rdv', label: 'Rendez-vous', icon: Calendar },
   { to: '/dashboard/reminders', label: 'Rappels SMS', icon: Bell },
@@ -106,6 +108,7 @@ export default function DashboardLayout() {
             <Route index element={<Overview />} />
             <Route path="leads" element={<Leads />} />
             <Route path="conversations" element={<Conversations />} />
+            <Route path="voice" element={<VoiceAssistant />} />
             <Route path="devis" element={<Devis />} />
             <Route path="rdv" element={<Rdv />} />
             <Route path="reminders" element={<Reminders />} />

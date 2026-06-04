@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { Session, User } from '@supabase/supabase-js'
 import { supabase, GarageProfile, Service, OpeningHours } from '@/lib/supabase'
+import { DEFAULT_REMINDER_FREQUENCIES } from '@/lib/serviceCatalog'
 
 export type SignUpProfile = {
   garageName: string
@@ -96,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         labor_rate: 75,
         services: config.services,
         opening_hours: config.openingHours,
+        reminder_frequencies: DEFAULT_REMINDER_FREQUENCIES,
       },
     })
 

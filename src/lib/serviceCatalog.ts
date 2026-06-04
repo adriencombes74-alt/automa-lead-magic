@@ -1,4 +1,4 @@
-import type { Service, ReminderType } from './supabase'
+import type { Service, ReminderType, ReminderFrequencies } from './supabase'
 
 export type CatalogEntry = Service & {
   default: boolean
@@ -24,4 +24,24 @@ export const DEFAULT_OPENING_HOURS = {
   vendredi: { open: '08:00', close: '18:00', closed: false },
   samedi: { open: '09:00', close: '12:00', closed: false },
   dimanche: { open: '08:00', close: '12:00', closed: true },
+}
+
+export const DEFAULT_REMINDER_FREQUENCIES: ReminderFrequencies = {
+  revision: {
+    enabled: true,
+    interval_months: 12,
+    sms_template: "Bonjour {client_name}, votre {vehicle} a ete revise chez {garage_name} il y a 1 an. C'est le moment de planifier votre prochaine revision ! Tel: {phone}. STOP au 36180.",
+  },
+  pneus_hiver: {
+    enabled: true,
+    send_month: 10,
+    send_day: 1,
+    sms_template: "Bonjour {client_name}, l'hiver approche ! Pensez a monter vos pneus hiver. {garage_name} vous accueille. Tel: {phone}. STOP au 36180.",
+  },
+  pneus_ete: {
+    enabled: true,
+    send_month: 4,
+    send_day: 1,
+    sms_template: "Bonjour {client_name}, le printemps arrive ! Pensez a remonter vos pneus ete. {garage_name} vous accueille. Tel: {phone}. STOP au 36180.",
+  },
 }
